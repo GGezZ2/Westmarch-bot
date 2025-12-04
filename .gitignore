@@ -5,6 +5,7 @@ dist/
 
 # Config file con token
 config.json
+node_modules/
 
 # Log
 *.log
