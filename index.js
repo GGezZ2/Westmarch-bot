@@ -96,6 +96,29 @@ client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     const db = await loadDB();
+
+        // --- AUTOCOMPLETE ---
+    if (interaction.isAutocomplete()) {
+        const focusedOption = interaction.options.getFocused(true);
+
+        // Solo per le opzioni 'nome', 'vecchio_nome'
+        if (["nome", "vecchio_nome"].includes(focusedOption.name)) {
+            const user = interaction.options.getUser("giocatore");
+            if (!user || !db.players[user.id]) {
+                return interaction.respond([]);
+            }
+
+            const choices = db.players[user.id].map(p => p.name);
+            const filtered = choices.filter(c => c.toLowerCase().startsWith(focusedOption.value.toLowerCase()));
+
+            return interaction.respond(
+                filtered.map(c => ({ name: c, value: c }))
+            );
+        }
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+    
     const command = interaction.commandName;
     const GM_ROLE_NAME = "GM"; // ruolo esclusivo
 
