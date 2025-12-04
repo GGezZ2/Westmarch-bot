@@ -1,7 +1,9 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
 import fs from "fs-extra";
-const config = fs.readJsonSync("./config.json");
-const { token, guildId, clientId } = config;
+// Legge direttamente dalle variabili d'ambiente
+const token = process.env.TOKEN;
+const guildId = process.env.GUILD_ID;
+const clientId = process.env.CLIENT_ID;
 const rest = new REST({ version: "10" }).setToken(token);
 
 // Registrazione dei comandi
