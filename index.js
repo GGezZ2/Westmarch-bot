@@ -29,6 +29,37 @@ const REWARDS = {
     "A": { xp: 2400, gold: 800 }
 };
 
+// === D&D 5e XP TABLE (for levels 1..20) ===
+const XP_LEVELS = [
+    0,      // lvl 1
+    300,    // lvl 2
+    900,    // lvl 3
+    2700,   // lvl 4
+    6500,   // lvl 5
+    14000,  // lvl 6
+    23000,  // lvl 7
+    34000,  // lvl 8
+    48000,  // lvl 9
+    64000,  // lvl 10
+    85000,  // lvl 11
+    100000, // lvl 12
+    120000, // lvl 13
+    140000, // lvl 14
+    165000, // lvl 15
+    195000, // lvl 16
+    225000, // lvl 17
+    265000, // lvl 18
+    305000, // lvl 19
+    355000  // lvl 20
+];
+
+function getLevelFromXP(xp) {
+    for (let lvl = XP_LEVELS.length - 1; lvl >= 0; lvl--) {
+        if (xp >= XP_LEVELS[lvl]) return lvl + 1;
+    }
+    return 1;
+}
+
 // === SLASH COMMANDS DEFINITION ===
 const commands = [
     new SlashCommandBuilder()
@@ -160,6 +191,50 @@ function hasRoleGM(member, roleName = "GM") {
 }
 const sanitizeItemsList = (raw) => raw.split(",").map(s => s.trim()).filter(s => s.length);
 
+// helpers for sintonized items
+const isSintonizedTag = (str) => /\[s\]/i.test(str);
+const stripSintonizedTag = (str) => str.replace(/\[s\]/ig, "").trim();
+
+// send level-up message (interaction required to find guild if needed)
+async function handleLevelUpIfAny(pg, oldXP, interaction, db) {
+    const oldLevel = pg.level || getLevelFromXP(oldXP);
+    const newLevel = getLevelFromXP(pg.xp);
+
+    if (newLevel > oldLevel) {
+        pg.level = newLevel;
+        await saveDB(db);
+
+        // prefer environment variable for channel ID
+        const levelChannelId = process.env.LEVEL_UP_CHANNEL;
+        let channel = null;
+
+        if (levelChannelId) {
+            channel = client.channels.cache.get(levelChannelId);
+        }
+
+        // fallback: try to find a channel in the guild whose name contains 'level'
+        if (!channel && interaction && interaction.guild) {
+            channel = interaction.guild.channels.cache.find(c => c.name && c.name.toLowerCase().includes("level"));
+        }
+
+        // fallback to reply in the channel where command was used (as last resort)
+        if (!channel) {
+            try {
+                await interaction.followUp({ content: `<@${pg.ownerId}> 🎉 **${pg.name} è salito al livello ${newLevel}!**`, ephemeral: false });
+            } catch (e) {
+                console.log("Unable to post level-up message in followUp:", e.message);
+            }
+            return;
+        }
+
+        try {
+            channel.send({ content: `<@${pg.ownerId}> 🎉 **${pg.name} è salito al livello ${newLevel}!**` });
+        } catch (e) {
+            console.error("Failed to send level-up message:", e.message);
+        }
+    }
+}
+
 // === INTERACTIONS ===
 client.on("interactionCreate", async interaction => {
     const db = await loadDB();
@@ -188,7 +263,7 @@ client.on("interactionCreate", async interaction => {
             return interaction.respond(filtered.map(c => ({ name: c, value: c })));
         }
 
-        // for nome_sintonia or nome_sintonia autocomplete (optional) - currently not used
+        // for nome_sintonia autocomplete (optional) - currently not used
         return interaction.respond([]);
     }
 
@@ -211,8 +286,19 @@ client.on("interactionCreate", async interaction => {
         if (db.players[user.id].length >= 2)
             return interaction.reply({ content: "Questo giocatore ha già 2 PG attivi!", ephemeral: true });
 
-        // default fields: xp, gold, conto_bancario, inventory, sintonie
-        db.players[user.id].push({ name, xp: 0, gold: 0, conto_bancario: 0, inventory: [], sintonie: [] });
+        // default fields: xp, gold, conto_bancario, inventory, sintonie, ownerId, level
+        const newPG = {
+            name,
+            xp: 0,
+            gold: 0,
+            conto_bancario: 0,
+            inventory: [],
+            sintonie: [],
+            ownerId: user.id,
+            level: getLevelFromXP(0)
+        };
+
+        db.players[user.id].push(newPG);
         await saveDB(db);
 
         return interaction.reply(`PG **${name}** creato per ${user.username}.`);
@@ -226,8 +312,18 @@ client.on("interactionCreate", async interaction => {
         const pg = getPG(user.id, name);
         if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
+        // mark inventory items that are sintonized (either have [s] tag or their clean name is in sintonie)
+        const invDisplay = pg.inventory.length
+            ? pg.inventory.map(i => {
+                // if item already has tag, show as-is; else check sintonie
+                if (isSintonizedTag(i)) return i;
+                const clean = stripSintonizedTag(i);
+                return pg.sintonie && pg.sintonie.includes(clean) ? `${i} [s]` : i;
+            }).join(", ")
+            : "Vuoto";
+
         return interaction.reply({
-            content: `📜 **Scheda di ${pg.name}**\nXP: ${pg.xp}\nGold: ${pg.gold}\nConto bancario: ${pg.conto_bancario}\nSintonie: ${pg.sintonie.length ? pg.sintonie.join(", ") : "Nessuna"}\nInventario: ${pg.inventory.length ? pg.inventory.join(", ") : "Vuoto"}`,
+            content: `📜 **Scheda di ${pg.name}**\nLivello: ${pg.level || getLevelFromXP(pg.xp)}\nXP: ${pg.xp}\nGold: ${pg.gold}\nConto bancario: ${pg.conto_bancario}\nSintonie: ${pg.sintonie.length ? pg.sintonie.join(", ") : "Nessuna"}\nInventario: ${invDisplay}`,
             ephemeral: false
         });
     }
@@ -244,10 +340,14 @@ client.on("interactionCreate", async interaction => {
         const pg = getPG(user.id, name);
         if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
+        const beforeXP = pg.xp || 0;
         pg.xp += REWARDS[grade].xp;
         pg.gold += REWARDS[grade].gold;
 
         await saveDB(db);
+
+        // check for level up (this will save again if leveled)
+        await handleLevelUpIfAny(pg, beforeXP, interaction, db);
 
         return interaction.reply(`Sessione grado **${grade}** completata!\n${pg.name} guadagna: **${REWARDS[grade].xp} XP** e **${REWARDS[grade].gold} oro**.`);
     }
@@ -268,23 +368,57 @@ client.on("interactionCreate", async interaction => {
         if (type === "xp") {
             const amount = parseInt(rawValue);
             if (Number.isNaN(amount)) return interaction.reply({ content: "Valore XP non valido.", ephemeral: true });
-            const before = pg.xp;
+            const before = pg.xp || 0;
             pg.xp += amount;
             await saveDB(db);
+            await handleLevelUpIfAny(pg, before, interaction, db);
             return interaction.reply(`${user.username} - PG **${pg.name}**: XP ${before} → ${pg.xp}. Nota: ${note}`);
         } else if (type === "gold") {
             const amount = parseInt(rawValue);
             if (Number.isNaN(amount)) return interaction.reply({ content: "Valore gold non valido.", ephemeral: true });
-            const before = pg.gold;
+            const before = pg.gold || 0;
             pg.gold += amount;
             await saveDB(db);
             return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${pg.gold}. Nota: ${note}`);
         } else if (type === "item") {
             const items = sanitizeItemsList(rawValue);
             if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
-            pg.inventory.push(...items);
+
+            // handle sintonized items automatically
+            pg.sintonie = pg.sintonie || [];
+            const addedItems = [];
+            const addedSints = [];
+            const skippedSints = [];
+
+            for (const rawItem of items) {
+                const hadTag = isSintonizedTag(rawItem);
+                const clean = stripSintonizedTag(rawItem);
+                const itemToStore = hadTag ? `${clean} [s]` : clean;
+
+                // push inventory (store item with [s] if user provided tag, otherwise plain)
+                pg.inventory.push(itemToStore);
+                addedItems.push(itemToStore);
+
+                // if item is sintonized (tag present) try to add to sintonie
+                if (hadTag) {
+                    if (!pg.sintonie.includes(clean)) {
+                        if (pg.sintonie.length >= 3) {
+                            skippedSints.push(clean);
+                        } else {
+                            pg.sintonie.push(clean);
+                            addedSints.push(clean);
+                        }
+                    }
+                }
+            }
+
             await saveDB(db);
-            return interaction.reply(`${user.username} - PG **${pg.name}**: Aggiunti item: ${items.join(", ")}. Nota: ${note}`);
+
+            let resp = `${user.username} - PG **${pg.name}**: Aggiunti item: ${addedItems.join(", ")}. Nota: ${note}`;
+            if (addedSints.length) resp += ` Sintonie aggiunte: ${addedSints.join(", ")}.`;
+            if (skippedSints.length) resp += ` Sintonie non aggiunte (limite 3): ${skippedSints.join(", ")}.`;
+
+            return interaction.reply(resp);
         } else {
             return interaction.reply({ content: "Tipo non valido.", ephemeral: true });
         }
@@ -306,34 +440,57 @@ client.on("interactionCreate", async interaction => {
         if (type === "xp") {
             const amount = parseInt(rawValue);
             if (Number.isNaN(amount)) return interaction.reply({ content: "Valore XP non valido.", ephemeral: true });
-            const before = pg.xp;
-            pg.xp = Math.max(0, pg.xp - amount);
+            const before = pg.xp || 0;
+            pg.xp = Math.max(0, before - amount);
+            // adjust level down if needed (no announcement)
+            pg.level = getLevelFromXP(pg.xp);
             await saveDB(db);
             return interaction.reply(`${user.username} - PG **${pg.name}**: XP ${before} → ${pg.xp}. Nota: ${note}`);
         } else if (type === "gold") {
             const amount = parseInt(rawValue);
             if (Number.isNaN(amount)) return interaction.reply({ content: "Valore gold non valido.", ephemeral: true });
-            const before = pg.gold;
-            pg.gold = Math.max(0, pg.gold - amount);
+            const before = pg.gold || 0;
+            pg.gold = Math.max(0, before - amount);
             await saveDB(db);
             return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${pg.gold}. Nota: ${note}`);
         } else if (type === "item") {
             const items = sanitizeItemsList(rawValue);
             if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
+            pg.sintonie = pg.sintonie || [];
             const removed = [];
             const notFound = [];
-            for (const it of items) {
-                // remove all occurrences
+            const removedSints = [];
+
+            for (const rawIt of items) {
+                const hadTag = isSintonizedTag(rawIt);
+                const clean = stripSintonizedTag(rawIt);
+
                 const beforeCount = pg.inventory.length;
-                pg.inventory = pg.inventory.filter(i => i !== it);
+                // remove all matching inventory entries that equal either raw form or clean or clean + [s]
+                pg.inventory = pg.inventory.filter(i => {
+                    const cleanedI = stripSintonizedTag(i);
+                    return cleanedI !== clean; // keep those that don't match the clean name
+                });
                 const afterCount = pg.inventory.length;
-                if (afterCount < beforeCount) removed.push(it);
-                else notFound.push(it);
+
+                if (afterCount < beforeCount) {
+                    removed.push(rawIt);
+                    // if the removed item corresponds to a sintonia, remove it
+                    if (pg.sintonie.includes(clean)) {
+                        pg.sintonie = pg.sintonie.filter(s => s !== clean);
+                        removedSints.push(clean);
+                    }
+                } else {
+                    notFound.push(rawIt);
+                }
             }
+
             await saveDB(db);
+
             let msg = `${user.username} - PG **${pg.name}**: Rimosso: ${removed.length ? removed.join(", ") : "Nessuno"}.`;
             if (notFound.length) msg += ` Non trovati: ${notFound.join(", ")}.`;
+            if (removedSints.length) msg += ` Sintonie rimosse: ${removedSints.join(", ")}.`;
             msg += ` Nota: ${note}`;
             return interaction.reply(msg);
         } else {
@@ -394,10 +551,36 @@ client.on("interactionCreate", async interaction => {
 
         if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
-        pg.inventory.push(...items);
+        // handle sintonized items automatically
+        pg.sintonie = pg.sintonie || [];
+        const addedItems = [];
+        const addedSints = [];
+        const skippedSints = [];
+
+        for (const rawItem of items) {
+            const hadTag = isSintonizedTag(rawItem);
+            const clean = stripSintonizedTag(rawItem);
+            const itemToStore = hadTag ? `${clean} [s]` : clean;
+
+            pg.inventory.push(itemToStore);
+            addedItems.push(itemToStore);
+
+            if (hadTag && !pg.sintonie.includes(clean)) {
+                if (pg.sintonie.length >= 3) skippedSints.push(clean);
+                else {
+                    pg.sintonie.push(clean);
+                    addedSints.push(clean);
+                }
+            }
+        }
+
         await saveDB(db);
 
-        return interaction.reply(`${user.username} - PG **${pg.name}**: Aggiunti item: ${items.join(", ")}`);
+        let resp = `${user.username} - PG **${pg.name}**: Aggiunti item: ${addedItems.join(", ")}.`;
+        if (addedSints.length) resp += ` Sintonie aggiunte: ${addedSints.join(", ")}.`;
+        if (skippedSints.length) resp += ` Sintonie non aggiunte (limite 3): ${skippedSints.join(", ")}.`;
+
+        return interaction.reply(resp);
     }
 
     // === RIMUOVI_ITEM (bulk) ===
@@ -415,17 +598,27 @@ client.on("interactionCreate", async interaction => {
 
         const removed = [];
         const notFound = [];
-        for (const it of items) {
+        const removedSints = [];
+
+        for (const rawIt of items) {
+            const clean = stripSintonizedTag(rawIt);
             const beforeCount = pg.inventory.length;
-            pg.inventory = pg.inventory.filter(i => i !== it);
+            pg.inventory = pg.inventory.filter(i => stripSintonizedTag(i) !== clean);
             const afterCount = pg.inventory.length;
-            if (afterCount < beforeCount) removed.push(it);
-            else notFound.push(it);
+            if (afterCount < beforeCount) {
+                removed.push(rawIt);
+                if (pg.sintonie.includes(clean)) {
+                    pg.sintonie = pg.sintonie.filter(s => s !== clean);
+                    removedSints.push(clean);
+                }
+            } else notFound.push(rawIt);
         }
+
         await saveDB(db);
 
         let msg = `${user.username} - PG **${pg.name}**: Rimosso: ${removed.length ? removed.join(", ") : "Nessuno"}.`;
         if (notFound.length) msg += ` Non trovati: ${notFound.join(", ")}.`;
+        if (removedSints.length) msg += ` Sintonie rimosse: ${removedSints.join(", ")}.`;
         return interaction.reply(msg);
     }
 
@@ -433,7 +626,8 @@ client.on("interactionCreate", async interaction => {
     if (command === "aggiungi_sintonia") {
         if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
 
-        const sint = interaction.options.getString("nome_sintonia");
+        const sintRaw = interaction.options.getString("nome_sintonia");
+        const sint = stripSintonizedTag(sintRaw);
         const user = interaction.options.getUser("giocatore");
         const name = interaction.options.getString("nome");
         const pg = getPG(user.id, name);
@@ -444,6 +638,11 @@ client.on("interactionCreate", async interaction => {
         if (pg.sintonie.includes(sint)) return interaction.reply({ content: "Questa sintonia è già presente.", ephemeral: true });
 
         pg.sintonie.push(sint);
+
+        // ensure inventory contains the corresponding [s] item
+        const inventoryHas = pg.inventory.some(i => stripSintonizedTag(i) === sint);
+        if (!inventoryHas) pg.inventory.push(`${sint} [s]`);
+
         await saveDB(db);
         return interaction.reply(`${user.username} - PG **${pg.name}**: Aggiunta sintonia: ${sint}.`);
     }
@@ -452,7 +651,8 @@ client.on("interactionCreate", async interaction => {
     if (command === "rimuovi_sintonia") {
         if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
 
-        const sint = interaction.options.getString("nome_sintonia");
+        const sintRaw = interaction.options.getString("nome_sintonia");
+        const sint = stripSintonizedTag(sintRaw);
         const user = interaction.options.getUser("giocatore");
         const name = interaction.options.getString("nome");
         const pg = getPG(user.id, name);
@@ -463,6 +663,9 @@ client.on("interactionCreate", async interaction => {
         if (!pg.sintonie.includes(sint)) return interaction.reply({ content: "Questa sintonia non è presente sul PG.", ephemeral: true });
 
         pg.sintonie = pg.sintonie.filter(s => s !== sint);
+        // remove inventory entries that correspond to that sintonia
+        pg.inventory = pg.inventory.filter(i => stripSintonizedTag(i) !== sint);
+
         await saveDB(db);
         return interaction.reply(`${user.username} - PG **${pg.name}**: Rimossa sintonia: ${sint}.`);
     }
