@@ -182,7 +182,7 @@ client.on("ready", () => {
 });
 
 // Utility helpers
-function hasRoleGM(member, roleName = "GM") {
+function hasRoleGM(member, roleName = "Gm-bot") {
     try {
         return member.roles.cache.some(r => r.name === roleName);
     } catch (e) {
@@ -270,14 +270,14 @@ client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     const command = interaction.commandName;
-    const GM_ROLE_NAME = "GM";
+    const GM_ROLE_NAME = "Gm-bot";
     const isGM = hasRoleGM(interaction.member, GM_ROLE_NAME);
 
     const getPG = (playerId, name) => db.players[playerId]?.find(p => p.name === name);
 
     // === CREA PG ===
     if (command === "crea_pg") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
         const user = interaction.options.getUser("giocatore");
         const name = interaction.options.getString("nome");
 
@@ -330,7 +330,7 @@ client.on("interactionCreate", async interaction => {
 
     // === RICOMPENSA ===
     if (command === "ricompensa") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
         const grade = interaction.options.getString("grado").toUpperCase();
         const user = interaction.options.getUser("giocatore");
         const name = interaction.options.getString("nome");
@@ -354,7 +354,7 @@ client.on("interactionCreate", async interaction => {
 
     // === AGGIUNGI (con note, supporto multiple items se tipo=item) ===
     if (command === "aggiungi") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const type = interaction.options.getString("tipo");
         const rawValue = interaction.options.getString("valore");
@@ -426,7 +426,7 @@ client.on("interactionCreate", async interaction => {
 
     // === RIMUOVI (con note, supporto multiple items se tipo=item) ===
     if (command === "rimuovi") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const type = interaction.options.getString("tipo");
         const rawValue = interaction.options.getString("valore");
@@ -500,7 +500,7 @@ client.on("interactionCreate", async interaction => {
 
     // === DEPOSITO (gold -> conto_bancario) ===
     if (command === "deposito") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const amount = interaction.options.getInteger("quantita");
         const user = interaction.options.getUser("giocatore");
@@ -520,7 +520,7 @@ client.on("interactionCreate", async interaction => {
 
     // === PRELIEVO (conto_bancario -> gold) ===
     if (command === "prelievo") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const amount = interaction.options.getInteger("quantita");
         const user = interaction.options.getUser("giocatore");
@@ -540,7 +540,7 @@ client.on("interactionCreate", async interaction => {
 
     // === AGGIUNGI_ITEM (bulk) ===
     if (command === "aggiungi_item") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const raw = interaction.options.getString("items");
         const items = sanitizeItemsList(raw);
@@ -585,7 +585,7 @@ client.on("interactionCreate", async interaction => {
 
     // === RIMUOVI_ITEM (bulk) ===
     if (command === "rimuovi_item") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const raw = interaction.options.getString("items");
         const items = sanitizeItemsList(raw);
@@ -624,7 +624,7 @@ client.on("interactionCreate", async interaction => {
 
     // === AGGIUNGI SINTONIA ===
     if (command === "aggiungi_sintonia") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const sintRaw = interaction.options.getString("nome_sintonia");
         const sint = stripSintonizedTag(sintRaw);
@@ -649,7 +649,7 @@ client.on("interactionCreate", async interaction => {
 
     // === RIMUOVI SINTONIA ===
     if (command === "rimuovi_sintonia") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
         const sintRaw = interaction.options.getString("nome_sintonia");
         const sint = stripSintonizedTag(sintRaw);
@@ -672,7 +672,7 @@ client.on("interactionCreate", async interaction => {
 
     // === ELIMINA PG ===
     if (command === "elimina_pg") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
         const user = interaction.options.getUser("giocatore");
         const name = interaction.options.getString("nome");
 
@@ -686,7 +686,7 @@ client.on("interactionCreate", async interaction => {
 
     // === RINOMINA PG ===
     if (command === "rinomina_pg") {
-        if (!isGM) return interaction.reply({ content: "Solo il ruolo GM può usare questo comando.", ephemeral: true });
+        if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
         const user = interaction.options.getUser("giocatore");
         const oldName = interaction.options.getString("vecchio_nome");
         const newName = interaction.options.getString("nuovo_nome");
