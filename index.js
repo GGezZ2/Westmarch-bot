@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
-import Database from "better-sqlite3";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 
 const token = process.env.TOKEN;
 const guildId = process.env.GUILD_ID;
@@ -13,40 +14,50 @@ if (!token || !clientId || !guildId) {
 const rest = new REST({ version: "10" }).setToken(token);
 
 // === DATABASE SQLITE ===
-const db = new Database("./westmarch.db");
+let db;
 
-// Creazione tabelle (se non esistono)
-db.exec(`
-CREATE TABLE IF NOT EXISTS players (
-    id TEXT PRIMARY KEY,
-    name TEXT
-);
+async function initDB() {
+  db = await open({
+    filename: "./westmarch.db",
+    driver: sqlite3.Database
+  });
 
-CREATE TABLE IF NOT EXISTS characters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    playerId TEXT NOT NULL,
-    name TEXT NOT NULL,
-    xp INTEGER NOT NULL DEFAULT 0,
-    gold INTEGER NOT NULL DEFAULT 0,
-    bank INTEGER NOT NULL DEFAULT 0,
-    level INTEGER NOT NULL DEFAULT 1,
-    FOREIGN KEY (playerId) REFERENCES players(id)
-);
+  await db.exec(`
+  CREATE TABLE IF NOT EXISTS players (
+      id TEXT PRIMARY KEY,
+      name TEXT
+  );
 
-CREATE TABLE IF NOT EXISTS inventory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    characterId INTEGER NOT NULL,
-    item TEXT NOT NULL,
-    FOREIGN KEY (characterId) REFERENCES characters(id)
-);
+  CREATE TABLE IF NOT EXISTS characters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      playerId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      xp INTEGER NOT NULL DEFAULT 0,
+      gold INTEGER NOT NULL DEFAULT 0,
+      bank INTEGER NOT NULL DEFAULT 0,
+      level INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY (playerId) REFERENCES players(id)
+  );
 
-CREATE TABLE IF NOT EXISTS attunements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    characterId INTEGER NOT NULL,
-    item TEXT NOT NULL,
-    FOREIGN KEY (characterId) REFERENCES characters(id)
-);
-`);
+  CREATE TABLE IF NOT EXISTS inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      item TEXT NOT NULL,
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS attunements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      item TEXT NOT NULL,
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+  );
+  `);
+
+  console.log("SQLite inizializzato");
+}
+
+await initDB();
 
 // === XP/GOLD REWARD TABLE ===
 const REWARDS = {
@@ -86,100 +97,106 @@ function getLevelFromXP(xp) {
   return 1;
 }
 
-// === DB HELPERS ===
+// === DB HELPERS (TUTTI ASYNC) ===
 
 // Player
-function ensurePlayer(user) {
-  const existing = db.prepare("SELECT id FROM players WHERE id = ?").get(user.id);
+async function ensurePlayer(user) {
+  const existing = await db.get("SELECT id FROM players WHERE id = ?", user.id);
   if (!existing) {
-    db.prepare("INSERT INTO players (id, name) VALUES (?, ?)").run(user.id, user.username);
+    await db.run("INSERT INTO players (id, name) VALUES (?, ?)", user.id, user.username);
   } else {
     // opzionale: aggiorno nome se cambiato
-    db.prepare("UPDATE players SET name = ? WHERE id = ?").run(user.username, user.id);
+    await db.run("UPDATE players SET name = ? WHERE id = ?", user.username, user.id);
   }
 }
 
 // Characters
-function getCharacter(playerId, name) {
-  return db.prepare("SELECT * FROM characters WHERE playerId = ? AND name = ?").get(playerId, name);
+async function getCharacter(playerId, name) {
+  return db.get("SELECT * FROM characters WHERE playerId = ? AND name = ?", playerId, name);
 }
 
-function getCharacterById(id) {
-  return db.prepare("SELECT * FROM characters WHERE id = ?").get(id);
+async function getCharacterById(id) {
+  return db.get("SELECT * FROM characters WHERE id = ?", id);
 }
 
-function listCharacters(playerId) {
-  return db.prepare("SELECT * FROM characters WHERE playerId = ?").all(playerId);
+async function listCharacters(playerId) {
+  return db.all("SELECT * FROM characters WHERE playerId = ?", playerId);
 }
 
-function listAllCharacterNames() {
-  return db.prepare("SELECT DISTINCT name FROM characters").all().map(r => r.name);
+async function listAllCharacterNames() {
+  const rows = await db.all("SELECT DISTINCT name FROM characters");
+  return rows.map(r => r.name);
 }
 
-function createCharacter(playerId, name) {
-  const stmt = db.prepare(`
-    INSERT INTO characters (playerId, name, xp, gold, bank, level)
-    VALUES (?, ?, 0, 0, 0, 1)
-  `);
-  const info = stmt.run(playerId, name);
-  return info.lastInsertRowid;
+async function createCharacter(playerId, name) {
+  const info = await db.run(
+    `INSERT INTO characters (playerId, name, xp, gold, bank, level)
+     VALUES (?, ?, 0, 0, 0, 1)`,
+    playerId,
+    name
+  );
+  return info.lastID;
 }
 
-function updateCharacterXPAndLevel(characterId, newXP) {
+async function updateCharacterXPAndLevel(characterId, newXP) {
   const newLevel = getLevelFromXP(newXP);
-  db.prepare("UPDATE characters SET xp = ?, level = ? WHERE id = ?").run(newXP, newLevel, characterId);
+  await db.run("UPDATE characters SET xp = ?, level = ? WHERE id = ?", newXP, newLevel, characterId);
   return newLevel;
 }
 
-function updateCharacterGold(characterId, newGold) {
-  db.prepare("UPDATE characters SET gold = ? WHERE id = ?").run(newGold, characterId);
+async function updateCharacterGold(characterId, newGold) {
+  await db.run("UPDATE characters SET gold = ? WHERE id = ?", newGold, characterId);
 }
 
-function updateCharacterBank(characterId, newBank) {
-  db.prepare("UPDATE characters SET bank = ? WHERE id = ?").run(newBank, characterId);
+async function updateCharacterBank(characterId, newBank) {
+  await db.run("UPDATE characters SET bank = ? WHERE id = ?", newBank, characterId);
 }
 
-function renameCharacter(characterId, newName) {
-  db.prepare("UPDATE characters SET name = ? WHERE id = ?").run(newName, characterId);
+async function renameCharacter(characterId, newName) {
+  await db.run("UPDATE characters SET name = ? WHERE id = ?", newName, characterId);
 }
 
-function deleteCharacterAndData(characterId) {
-  db.prepare("DELETE FROM inventory WHERE characterId = ?").run(characterId);
-  db.prepare("DELETE FROM attunements WHERE characterId = ?").run(characterId);
-  db.prepare("DELETE FROM characters WHERE id = ?").run(characterId);
+async function deleteCharacterAndData(characterId) {
+  await db.run("DELETE FROM inventory WHERE characterId = ?", characterId);
+  await db.run("DELETE FROM attunements WHERE characterId = ?", characterId);
+  await db.run("DELETE FROM characters WHERE id = ?", characterId);
 }
 
 // Inventory
-function getInventory(characterId) {
-  return db.prepare("SELECT item FROM inventory WHERE characterId = ?").all(characterId).map(r => r.item);
+async function getInventory(characterId) {
+  const rows = await db.all("SELECT item FROM inventory WHERE characterId = ?", characterId);
+  return rows.map(r => r.item);
 }
 
-function addInventoryItem(characterId, item) {
-  db.prepare("INSERT INTO inventory (characterId, item) VALUES (?, ?)").run(characterId, item);
+async function addInventoryItem(characterId, item) {
+  await db.run("INSERT INTO inventory (characterId, item) VALUES (?, ?)", characterId, item);
 }
 
-function removeInventoryItemsByCleanName(characterId, cleanName) {
-  const rows = db.prepare("SELECT id, item FROM inventory WHERE characterId = ?").all(characterId);
+async function removeInventoryItemsByCleanName(characterId, cleanName) {
+  const rows = await db.all("SELECT id, item FROM inventory WHERE characterId = ?", characterId);
   const toDelete = rows.filter(r => stripSintonizedTag(r.item) === cleanName);
-  toDelete.forEach(r => db.prepare("DELETE FROM inventory WHERE id = ?").run(r.id));
+  for (const r of toDelete) {
+    await db.run("DELETE FROM inventory WHERE id = ?", r.id);
+  }
   return toDelete.length;
 }
 
 // Attunements (sintonie)
-function getAttunements(characterId) {
-  return db.prepare("SELECT item FROM attunements WHERE characterId = ?").all(characterId).map(r => r.item);
+async function getAttunements(characterId) {
+  const rows = await db.all("SELECT item FROM attunements WHERE characterId = ?", characterId);
+  return rows.map(r => r.item);
 }
 
-function addAttunement(characterId, item) {
-  db.prepare("INSERT INTO attunements (characterId, item) VALUES (?, ?)").run(characterId, item);
+async function addAttunement(characterId, item) {
+  await db.run("INSERT INTO attunements (characterId, item) VALUES (?, ?)", characterId, item);
 }
 
-function removeAttunement(characterId, item) {
-  db.prepare("DELETE FROM attunements WHERE characterId = ? AND item = ?").run(characterId, item);
+async function removeAttunement(characterId, item) {
+  await db.run("DELETE FROM attunements WHERE characterId = ? AND item = ?", characterId, item);
 }
 
-function clearAttunementByName(characterId, item) {
-  db.prepare("DELETE FROM attunements WHERE characterId = ? AND item = ?").run(characterId, item);
+async function clearAttunementByName(characterId, item) {
+  await db.run("DELETE FROM attunements WHERE characterId = ? AND item = ?", characterId, item);
 }
 
 // === SLASH COMMANDS DEFINITION ===
@@ -370,10 +387,10 @@ client.on("interactionCreate", async interaction => {
       let choices = [];
 
       if (user) {
-        const chars = listCharacters(user.id);
+        const chars = await listCharacters(user.id);
         choices = chars.map(c => c.name);
       } else {
-        choices = listAllCharacterNames();
+        choices = await listAllCharacterNames();
       }
 
       const filtered = choices
@@ -398,13 +415,13 @@ client.on("interactionCreate", async interaction => {
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
 
-    ensurePlayer(user);
+    await ensurePlayer(user);
 
-    const existing = listCharacters(user.id);
+    const existing = await listCharacters(user.id);
     if (existing.length >= 2)
       return interaction.reply({ content: "Questo giocatore ha già 2 PG attivi!", ephemeral: true });
 
-    createCharacter(user.id, name);
+    await createCharacter(user.id, name);
 
     return interaction.reply(`PG **${name}** creato per ${user.username}.`);
   }
@@ -414,11 +431,11 @@ client.on("interactionCreate", async interaction => {
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
 
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
-    const inventory = getInventory(pg.id);
-    const sintonie = getAttunements(pg.id);
+    const inventory = await getInventory(pg.id);
+    const sintonie = await getAttunements(pg.id);
 
     const invDisplay = inventory.length
       ? inventory.map(i => {
@@ -451,7 +468,7 @@ client.on("interactionCreate", async interaction => {
     const reward = REWARDS[grade];
     if (!reward) return interaction.reply({ content: "Grado non valido (C/B/A).", ephemeral: true });
 
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     const beforeXP = pg.xp;
@@ -459,8 +476,10 @@ client.on("interactionCreate", async interaction => {
     const newGold = pg.gold + reward.gold;
     const newLevel = getLevelFromXP(newXP);
 
-    db.prepare("UPDATE characters SET xp = ?, level = ?, gold = ? WHERE id = ?")
-      .run(newXP, newLevel, newGold, pg.id);
+    await db.run(
+      "UPDATE characters SET xp = ?, level = ?, gold = ? WHERE id = ?",
+      newXP, newLevel, newGold, pg.id
+    );
 
     const updatedChar = { ...pg, xp: newXP, level: newLevel };
 
@@ -481,7 +500,7 @@ client.on("interactionCreate", async interaction => {
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
 
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (type === "xp") {
@@ -492,8 +511,10 @@ client.on("interactionCreate", async interaction => {
       const newXP = before + amount;
       const newLevel = getLevelFromXP(newXP);
 
-      db.prepare("UPDATE characters SET xp = ?, level = ? WHERE id = ?")
-        .run(newXP, newLevel, pg.id);
+      await db.run(
+        "UPDATE characters SET xp = ?, level = ? WHERE id = ?",
+        newXP, newLevel, pg.id
+      );
 
       const updatedChar = { ...pg, xp: newXP, level: newLevel };
       await handleLevelUpIfAny(updatedChar, before, interaction);
@@ -506,14 +527,14 @@ client.on("interactionCreate", async interaction => {
       const before = pg.gold;
       const newGold = before + amount;
 
-      updateCharacterGold(pg.id, newGold);
+      await updateCharacterGold(pg.id, newGold);
 
       return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${newGold}. Nota: ${note}`);
     } else if (type === "item") {
       const items = sanitizeItemsList(rawValue);
       if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
-      let sintonie = getAttunements(pg.id);
+      let sintonie = await getAttunements(pg.id);
       const addedItems = [];
       const addedSints = [];
       const skippedSints = [];
@@ -523,7 +544,7 @@ client.on("interactionCreate", async interaction => {
         const clean = stripSintonizedTag(rawItem);
         const itemToStore = hadTag ? `${clean} [s]` : clean;
 
-        addInventoryItem(pg.id, itemToStore);
+        await addInventoryItem(pg.id, itemToStore);
         addedItems.push(itemToStore);
 
         if (hadTag) {
@@ -531,7 +552,7 @@ client.on("interactionCreate", async interaction => {
             if (sintonie.length >= 3) {
               skippedSints.push(clean);
             } else {
-              addAttunement(pg.id, clean);
+              await addAttunement(pg.id, clean);
               sintonie.push(clean);
               addedSints.push(clean);
             }
@@ -559,7 +580,7 @@ client.on("interactionCreate", async interaction => {
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
 
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (type === "xp") {
@@ -569,8 +590,10 @@ client.on("interactionCreate", async interaction => {
       const newXP = Math.max(0, before - amount);
       const newLevel = getLevelFromXP(newXP);
 
-      db.prepare("UPDATE characters SET xp = ?, level = ? WHERE id = ?")
-        .run(newXP, newLevel, pg.id);
+      await db.run(
+        "UPDATE characters SET xp = ?, level = ? WHERE id = ?",
+        newXP, newLevel, pg.id
+      );
 
       return interaction.reply(`${user.username} - PG **${pg.name}**: XP ${before} → ${newXP}. Nota: ${note}`);
     } else if (type === "gold") {
@@ -579,14 +602,14 @@ client.on("interactionCreate", async interaction => {
       const before = pg.gold;
       const newGold = Math.max(0, before - amount);
 
-      updateCharacterGold(pg.id, newGold);
+      await updateCharacterGold(pg.id, newGold);
 
       return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${newGold}. Nota: ${note}`);
     } else if (type === "item") {
       const items = sanitizeItemsList(rawValue);
       if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
-      let sintonie = getAttunements(pg.id);
+      let sintonie = await getAttunements(pg.id);
       const removed = [];
       const notFound = [];
       const removedSints = [];
@@ -594,14 +617,14 @@ client.on("interactionCreate", async interaction => {
       for (const rawIt of items) {
         const clean = stripSintonizedTag(rawIt);
 
-        const beforeCount = getInventory(pg.id).length;
-        const deletedCount = removeInventoryItemsByCleanName(pg.id, clean);
+        const beforeCount = (await getInventory(pg.id)).length;
+        const deletedCount = await removeInventoryItemsByCleanName(pg.id, clean);
         const afterCount = beforeCount - deletedCount;
 
         if (deletedCount > 0) {
           removed.push(rawIt);
           if (sintonie.includes(clean)) {
-            clearAttunementByName(pg.id, clean);
+            await clearAttunementByName(pg.id, clean);
             sintonie = sintonie.filter(s => s !== clean);
             removedSints.push(clean);
           }
@@ -628,7 +651,7 @@ client.on("interactionCreate", async interaction => {
     const amount = interaction.options.getInteger("quantita");
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (amount <= 0) return interaction.reply({ content: "Quantità non valida.", ephemeral: true });
@@ -637,8 +660,8 @@ client.on("interactionCreate", async interaction => {
     const newGold = pg.gold - amount;
     const newBank = pg.bank + amount;
 
-    updateCharacterGold(pg.id, newGold);
-    updateCharacterBank(pg.id, newBank);
+    await updateCharacterGold(pg.id, newGold);
+    await updateCharacterBank(pg.id, newBank);
 
     return interaction.reply(`${user.username} - PG **${pg.name}**: Deposito di ${amount} effettuato. Gold: ${newGold}. Conto: ${newBank}`);
   }
@@ -650,7 +673,7 @@ client.on("interactionCreate", async interaction => {
     const amount = interaction.options.getInteger("quantita");
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (amount <= 0) return interaction.reply({ content: "Quantità non valida.", ephemeral: true });
@@ -659,8 +682,8 @@ client.on("interactionCreate", async interaction => {
     const newBank = pg.bank - amount;
     const newGold = pg.gold + amount;
 
-    updateCharacterBank(pg.id, newBank);
-    updateCharacterGold(pg.id, newGold);
+    await updateCharacterBank(pg.id, newBank);
+    await updateCharacterGold(pg.id, newGold);
 
     return interaction.reply(`${user.username} - PG **${pg.name}**: Prelievo di ${amount} effettuato. Gold: ${newGold}. Conto: ${newBank}`);
   }
@@ -673,12 +696,12 @@ client.on("interactionCreate", async interaction => {
     const items = sanitizeItemsList(raw);
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
-    let sintonie = getAttunements(pg.id);
+    let sintonie = await getAttunements(pg.id);
     const addedItems = [];
     const addedSints = [];
     const skippedSints = [];
@@ -688,13 +711,13 @@ client.on("interactionCreate", async interaction => {
       const clean = stripSintonizedTag(rawItem);
       const itemToStore = hadTag ? `${clean} [s]` : clean;
 
-      addInventoryItem(pg.id, itemToStore);
+      await addInventoryItem(pg.id, itemToStore);
       addedItems.push(itemToStore);
 
       if (hadTag && !sintonie.includes(clean)) {
         if (sintonie.length >= 3) skippedSints.push(clean);
         else {
-          addAttunement(pg.id, clean);
+          await addAttunement(pg.id, clean);
           sintonie.push(clean);
           addedSints.push(clean);
         }
@@ -716,12 +739,12 @@ client.on("interactionCreate", async interaction => {
     const items = sanitizeItemsList(raw);
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
     if (!items.length) return interaction.reply({ content: "Nessun item valido fornito.", ephemeral: true });
 
-    let sintonie = getAttunements(pg.id);
+    let sintonie = await getAttunements(pg.id);
     const removed = [];
     const notFound = [];
     const removedSints = [];
@@ -729,14 +752,14 @@ client.on("interactionCreate", async interaction => {
     for (const rawIt of items) {
       const clean = stripSintonizedTag(rawIt);
 
-      const beforeCount = getInventory(pg.id).length;
-      const deletedCount = removeInventoryItemsByCleanName(pg.id, clean);
+      const beforeCount = (await getInventory(pg.id)).length;
+      const deletedCount = await removeInventoryItemsByCleanName(pg.id, clean);
       const afterCount = beforeCount - deletedCount;
 
       if (deletedCount > 0) {
         removed.push(rawIt);
         if (sintonie.includes(clean)) {
-          clearAttunementByName(pg.id, clean);
+          await clearAttunementByName(pg.id, clean);
           sintonie = sintonie.filter(s => s !== clean);
           removedSints.push(clean);
         }
@@ -759,18 +782,18 @@ client.on("interactionCreate", async interaction => {
     const sint = stripSintonizedTag(sintRaw);
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
-    let sintonie = getAttunements(pg.id);
+    let sintonie = await getAttunements(pg.id);
     if (sintonie.length >= 3) return interaction.reply({ content: "Impossibile: massimo 3 sintonie raggiunto.", ephemeral: true });
     if (sintonie.includes(sint)) return interaction.reply({ content: "Questa sintonia è già presente.", ephemeral: true });
 
-    addAttunement(pg.id, sint);
+    await addAttunement(pg.id, sint);
 
-    const inv = getInventory(pg.id);
+    const inv = await getInventory(pg.id);
     const inventoryHas = inv.some(i => stripSintonizedTag(i) === sint);
-    if (!inventoryHas) addInventoryItem(pg.id, `${sint} [s]`);
+    if (!inventoryHas) await addInventoryItem(pg.id, `${sint} [s]`);
 
     return interaction.reply(`${user.username} - PG **${pg.name}**: Aggiunta sintonia: ${sint}.`);
   }
@@ -783,17 +806,17 @@ client.on("interactionCreate", async interaction => {
     const sint = stripSintonizedTag(sintRaw);
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
-    let sintonie = getAttunements(pg.id);
+    let sintonie = await getAttunements(pg.id);
     if (!sintonie.length) return interaction.reply({ content: "Nessuna sintonia da rimuovere.", ephemeral: true });
     if (!sintonie.includes(sint)) return interaction.reply({ content: "Questa sintonia non è presente sul PG.", ephemeral: true });
 
-    clearAttunementByName(pg.id, sint);
+    await clearAttunementByName(pg.id, sint);
 
     // remove inventory entries that correspond to that sintonia
-    removeInventoryItemsByCleanName(pg.id, sint);
+    await removeInventoryItemsByCleanName(pg.id, sint);
 
     return interaction.reply(`${user.username} - PG **${pg.name}**: Rimossa sintonia: ${sint}.`);
   }
@@ -804,15 +827,15 @@ client.on("interactionCreate", async interaction => {
     const user = interaction.options.getUser("giocatore");
     const name = interaction.options.getString("nome");
 
-    const pg = getCharacter(user.id, name);
+    const pg = await getCharacter(user.id, name);
     if (!pg) return interaction.reply({ content: "Questo giocatore non ha questo PG.", ephemeral: true });
 
-    deleteCharacterAndData(pg.id);
+    await deleteCharacterAndData(pg.id);
 
     // se il player non ha più pg, posso opzionalmente rimuovere record player
-    const remaining = listCharacters(user.id);
+    const remaining = await listCharacters(user.id);
     if (remaining.length === 0) {
-      db.prepare("DELETE FROM players WHERE id = ?").run(user.id);
+      await db.run("DELETE FROM players WHERE id = ?", user.id);
     }
 
     return interaction.reply({ content: `PG **${name}** eliminato.`, ephemeral: false });
@@ -825,10 +848,10 @@ client.on("interactionCreate", async interaction => {
     const oldName = interaction.options.getString("vecchio_nome");
     const newName = interaction.options.getString("nuovo_nome");
 
-    const pg = getCharacter(user.id, oldName);
+    const pg = await getCharacter(user.id, oldName);
     if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
-    renameCharacter(pg.id, newName);
+    await renameCharacter(pg.id, newName);
 
     return interaction.reply({ content: `PG **${oldName}** rinominato in **${newName}**.`, ephemeral: false });
   }
@@ -836,7 +859,7 @@ client.on("interactionCreate", async interaction => {
   // === LISTA PG ===
   if (command === "lista_pg") {
     const user = interaction.options.getUser("giocatore");
-    const chars = listCharacters(user.id);
+    const chars = await listCharacters(user.id);
     const list = chars.map(p => p.name);
     return interaction.reply({ content: `PG di ${user.username}: ${list.length ? list.join(", ") : "Nessuno"}`, ephemeral: false });
   }
