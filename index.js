@@ -18,7 +18,7 @@ let db;
 
 async function initDB() {
   db = await open({
-    filename: "./westmarch.db",
+    filename: "/data/westmarch.db",
     driver: sqlite3.Database
   });
 
