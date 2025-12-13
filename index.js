@@ -335,24 +335,49 @@ const isSintonizedTag = (str) => /\[s\]/i.test(str);
 const stripSintonizedTag = (str) => str.replace(/\[s\]/ig, "").trim();
 
 // send level-up message (interaction required to find guild if needed)
-async function handleLevelUpIfAny(character, oldXP, interaction) {
-  const oldLevel = character.level || getLevelFromXP(oldXP);
+async function handleLevelUpIfAny(characterId, oldXP, interaction) {
+  const character = await getCharacterById(characterId);
+  if (!character) return;
+
+  const oldLevel = getLevelFromXP(oldXP);
   const newLevel = getLevelFromXP(character.xp);
 
-  if (newLevel > oldLevel) {
-    const levelChannelId = process.env.LEVEL_UP_CHANNEL;
-    let channel = null;
+  if (newLevel <= oldLevel) return;
 
-    if (levelChannelId) {
-      channel = client.channels.cache.get(levelChannelId);
+  // sicurezza: aggiorna il livello nel DB
+  await db.run(
+    "UPDATE characters SET level = ? WHERE id = ?",
+    newLevel,
+    characterId
+  );
+
+  const msg = `<@${character.playerId}> 🎉 **${character.name} è salito al livello ${newLevel}!**`;
+
+  const levelChannelId = process.env.LEVEL_UP_CHANNEL;
+  let channel = null;
+
+  if (levelChannelId) {
+    channel = client.channels.cache.get(levelChannelId);
+  }
+
+  if (!channel && interaction?.guild) {
+    channel = interaction.guild.channels.cache.find(
+      c => c.name && c.name.toLowerCase().includes("level")
+    );
+  }
+
+  try {
+    if (channel) {
+      await channel.send({ content: msg });
+    } else if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: msg });
+    } else {
+      await interaction.reply({ content: msg });
     }
-
-    // fallback: try to find a channel in the guild whose name contains 'level'
-    if (!channel && interaction && interaction.guild) {
-      channel = interaction.guild.channels.cache.find(c => c.name && c.name.toLowerCase().includes("level"));
-    }
-
-    const msg = `<@${character.playerId}> 🎉 **${character.name} è salito al livello ${newLevel}!**`;
+  } catch (e) {
+    console.error("Errore notifica level up:", e.message);
+  }
+}
 
     // fallback to reply in the channel where command was used (as last resort)
     if (!channel) {
@@ -483,7 +508,7 @@ client.on("interactionCreate", async interaction => {
 
     const updatedChar = { ...pg, xp: newXP, level: newLevel };
 
-    await handleLevelUpIfAny(updatedChar, beforeXP, interaction);
+   await handleLevelUpIfAny(pg.id, beforeXP, interaction);
 
     return interaction.reply(
       `Sessione grado **${grade}** completata!\n${pg.name} guadagna: **${reward.xp} XP** e **${reward.gold} oro**.`
@@ -517,7 +542,8 @@ client.on("interactionCreate", async interaction => {
       );
 
       const updatedChar = { ...pg, xp: newXP, level: newLevel };
-      await handleLevelUpIfAny(updatedChar, before, interaction);
+      await handleLevelUpIfAny(pg.id, before, interaction);
+
 
       return interaction.reply(`${user.username} - PG **${pg.name}**: XP ${before} → ${newXP}. Nota: ${note}`);
     } else if (type === "gold") {
