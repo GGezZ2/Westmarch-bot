@@ -334,7 +334,7 @@ const sanitizeItemsList = (raw) => raw.split(",").map(s => s.trim()).filter(s =>
 const isSintonizedTag = (str) => /\[s\]/i.test(str);
 const stripSintonizedTag = (str) => str.replace(/\[s\]/ig, "").trim();
 
-// send level-up message (interaction required to find guild if needed)
+// === LEVEL UP NOTIFICATION ===
 async function handleLevelUpIfAny(characterId, oldXP, interaction) {
   const character = await getCharacterById(characterId);
   if (!character) return;
@@ -344,7 +344,7 @@ async function handleLevelUpIfAny(characterId, oldXP, interaction) {
 
   if (newLevel <= oldLevel) return;
 
-  // sicurezza: aggiorna il livello nel DB
+  // assicura coerenza DB
   await db.run(
     "UPDATE characters SET level = ? WHERE id = ?",
     newLevel,
@@ -353,53 +353,35 @@ async function handleLevelUpIfAny(characterId, oldXP, interaction) {
 
   const msg = `<@${character.playerId}> 🎉 **${character.name} è salito al livello ${newLevel}!**`;
 
-  const levelChannelId = process.env.LEVEL_UP_CHANNEL;
   let channel = null;
 
-  if (levelChannelId) {
-    channel = client.channels.cache.get(levelChannelId);
+  // canale configurato via env
+  if (process.env.LEVEL_UP_CHANNEL) {
+    channel = client.channels.cache.get(process.env.LEVEL_UP_CHANNEL);
   }
 
+  // fallback: canale con "level" nel nome
   if (!channel && interaction?.guild) {
     channel = interaction.guild.channels.cache.find(
-      c => c.name && c.name.toLowerCase().includes("level")
+      c => c.name?.toLowerCase().includes("level")
     );
   }
 
   try {
     if (channel) {
       await channel.send({ content: msg });
-    } else if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: msg });
-    } else {
-      await interaction.reply({ content: msg });
+    } else if (interaction) {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: msg });
+      } else {
+        await interaction.reply({ content: msg });
+      }
     }
   } catch (e) {
     console.error("Errore notifica level up:", e.message);
   }
 }
 
-    // fallback to reply in the channel where command was used (as last resort)
-    if (!channel) {
-      try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({ content: msg, ephemeral: false });
-        } else {
-          await interaction.reply({ content: msg, ephemeral: false });
-        }
-      } catch (e) {
-        console.log("Unable to post level-up message:", e.message);
-      }
-      return;
-    }
-
-    try {
-      channel.send({ content: msg });
-    } catch (e) {
-      console.error("Failed to send level-up message:", e.message);
-    }
-  }
-}
 
 // === INTERACTIONS ===
 client.on("interactionCreate", async interaction => {
